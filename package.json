@@ -8,7 +8,7 @@
     "test": "jest"
   },
   "name": "natural-future-date-parser",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Converts a natural language text into a date in the future",
   "main": "dateparser.js",
   "directories": {
