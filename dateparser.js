@@ -1,4 +1,4 @@
-const LATER = 'LATER'
+const TODAY = 'TODAY'
 const WEEKEND = 'WEEKEND'
 const TONIGHT = 'TONIGHT'
 const TOMORROW = 'TOMORROW'
@@ -6,11 +6,14 @@ const NEXT_WEEK = 'NEXT_WEEK'
 const NEXT_MONTH = 'NEXT_MONTH'
 const NEXT_QUARTER = 'NEXT_QUARTER'
 const NEXT_YEAR = 'NEXT_YEAR'
+const LATER_TONIGHT = 'LATER_TONIGHT'
 
-const DEFAULT_HOUR = 8
+const DEFAULT_HOUR = 9
 const TONIGHT_TIME = 20
+const END_OF_DAY_TIME = 17
 
 const DAYS = 'days'
+const DAY = 'day'
 const WEEKDAY = 'weekday'
 const MONTH = 'month'
 const QUARTER = 'quarter'
@@ -18,8 +21,11 @@ const WEEKS = 'weeks'
 const MONTHS = 'months'
 const YEARS =  'years'
 const HOUR = 'hour'
+const HOURS = 'hours'
+// next X hours but minute = 0
+const HOURS_NO_MIN = 'hours-no-min'
 const TIMEZONE = 'timezone'
-const AM_PM = ['am', 'pm', 'a.m.', 'p.m.', 'a.m', 'p.m', 'am.', 'pm.']
+const AM_PM = ['am', 'pm', 'a.m.', 'p.m.', 'a.m', 'p.m', 'am.', 'pm.', 'a', 'p']
 const ORDINALS = ['st', 'nd', 'rd', 'th']
 const SEPARATORS = ['/', '-', '\\', '–']
 
@@ -45,7 +51,7 @@ function nextWeekday(date, weekday) {
 function findPosInGlossary(text, kind, locale="en-us") {
     let language = locale.slice(0,2)
     let phrase = text.split(" ");
-    let kindWords = GLOSSARY[language].filter(x => x.type === kind).map(x => x.target);
+    let kindWords = GLOSSARY[language].filter(x => x.result.some(y => y.type === kind)).map(x => x.target);
     
     for (let size = 3; size > 0; size--) {
         const formattedPhrase = [];
@@ -64,11 +70,25 @@ function findPosInGlossary(text, kind, locale="en-us") {
 
 }
 
+function findExactInGlossary(text, kind, language="en") {
+    let words = text.split(" ");
+    let glossary = GLOSSARY[language];
+    let kindWords = glossary.filter(x => x.result.some(y => y.type === kind)).map(x => x.target);
+    
+    for (let pos = 0; pos < words.length; pos++) {
+        if (kindWords.includes(words[pos])) {
+            return pos;
+        }
+    }
+    
+    return null;
+}
+
 function wordsToDatepart(text, locale='en-us', filter = null) {
     let language = locale.slice(0,2);
     let glossary = GLOSSARY[language];
     if (filter !== null) {
-        glossary = glossary.filter(x => filter.includes(x.type));
+        glossary = glossary.filter(x => x.result.some(r => filter.includes(r.type)));
     }
     
     let items = glossary.filter(x => x.target.startsWith(text))
@@ -87,9 +107,13 @@ function wordsToDatepart(text, locale='en-us', filter = null) {
         // slice items to remove the word and make a set of it, so if there are two or more words that start with input text
         // and the result of those words is the same (i.e. they mean the same concept), it returns the first one
         // EXAMPLE: tomor for tomorrow and tomorow
-        if (new Set(items.map(x => x.value)).size === 1) {
-            return items[0];
+        
+        for (let x = 1; x < items.length; x++) {
+            if (JSON.stringify(items[x].result) !== JSON.stringify(items[x-1].result)) {
+                return null;
+            }
         }
+        return items[0];
     }
     return null;
 }
@@ -193,17 +217,18 @@ function getTime(word) {
     let minute = null;
     let second = null;
 
+    // find a colon anywhere or am/pm at the end of the the word
     
-    // find colon or am/pm in the word
-    if (word.includes(':') || AM_PM.some(x => word.includes(x))) {
+    // if (word.includes(':') || (AM_PM.some(x => word.endsWith(x)) && AM_PM.some(x => /\d/.test(x)))) {
+    if (word.includes(':') || AM_PM.some(x => word.endsWith(x)) ) {
         let time = word.split(":");
         
         let amPm = null;
         let lastPart = time.slice(-1)[0];
-        console.log("lastPart", lastPart, "time", time, "word", word)
+        
         for (let i = 0; i < lastPart.length; i++) {
             if (isNaN(lastPart[i])) {
-                console.log("lastPart[i]", lastPart[i], "i", i, "lastPart", lastPart)
+                // console.log("lastPart[i]", lastPart[i], "i", i, "lastPart", lastPart)
                 time[time.length - 1] = lastPart.slice(0, i);
                 amPm = word.slice(i);
                 break;
@@ -214,17 +239,23 @@ function getTime(word) {
         if (amPm !== null && amPm.includes('p')) {
             pm = true;
         }
-        
-        time = time.map(x => parseInt(x))
-        if (time.length === 1) {
-            hour = time[0];
-        } else if (time.length === 2) {
-            [hour, minute] = time;
-        } else if (time.length === 3) {
-            [hour, minute, second] = time;
+
+        // check if what I have in time is a list of numbers
+        time = time.filter(x => /^\d+$/.test(x))
+        if (time.length > 0) {
+            time = time.map(x => parseInt(x))
+            
+            if (time.length === 1) {
+                hour = time[0];
+            } else if (time.length === 2) {
+                [hour, minute] = time;
+            } else if (time.length === 3) {
+                [hour, minute, second] = time;
+            }
+    
+            hour = pm && hour < 12 ? hour + 12 : hour;    
         }
 
-        hour = pm && hour < 12 ? hour + 12 : hour;
     }
     return [hour, minute, second];
 }
@@ -240,7 +271,7 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
     if (baseDate == null) {
         baseDate = new Date();
     }
-
+    
     text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     
     if (!locale) {
@@ -273,11 +304,48 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
     let quarter = null
     
     let {dayPosition: dayPos, monthPosition: monthPos} = getDayAndMonthPositionInLocaleDate(locale);
+    // **** FIND NUMBERS AND LETTERS (1w, 2mo, 3d, 4h, 5m, 6mins) *****
+    for (let i = 0; i < words.length; i++) {
+        let word = words[i];
+        if (!isNaN(word[0]) && isNaN(word[word.length - 1]) && !AM_PM.includes(word.slice(-2))) {
+            let lastDigit = 0;
+            for (let i = word.length - 1; i >= 0; i--) {
+                if (!isNaN(word[i])) {
+                    lastDigit = i;
+                    break;
+                }
+            }
+    
+            let number = parseInt(word.slice(0, lastDigit + 1));
+            let letters = word.slice(lastDigit + 1);
+    
+            let relativeWord = wordsToDatepart(letters, language, ["relative"]);
+    
+            if (relativeWord !== null) {
+                let newWord = number + ' ' + relativeWord.result[0].value;
+                text = text.replace(new RegExp('\\b' + word + '\\b', 'g'), newWord);
+                words = text.split(" ");
+            }
+        }
+    }
 
     // ### FIND RELATIVE ###
     let start = null;
     start = findPosInGlossary(text, 'in', locale)
     
+    if (start === null) {
+        let firstRelative = findExactInGlossary(text, 'relative', language);
+    
+        // first relative minus one because number is before the first relative word
+        if (firstRelative !== null) {
+            firstRelative = firstRelative - 1;
+            let firstWord = words[firstRelative];
+            if (wordsToDatepart(firstWord, language, ["number"]) !== null || !isNaN(firstWord)) {
+                start = firstRelative;
+            }
+        }
+    }
+
     if (start !== null) {
         // in_phrase is the maximum length for an in phrase (i.e. "in 2 days and an hour", 6 words)
         let inPhrase = words.slice(start, start + 6);
@@ -286,7 +354,7 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
         for (let i = 0; i < inPhrase.length; i++) {
             let result = wordsToDatepart(inPhrase[i], locale, ["number"]);
             if (result !== null) {
-                inPhrase[i] = String(result.value);
+                inPhrase[i] = String(result.result[0].value);
             }
         }
         let relatives = {};
@@ -296,7 +364,7 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
         for (let i = 0; i < inPhrase.length; i++) {
             let result = wordsToDatepart(inPhrase[i], locale, ["relative"]);
             if (result !== null) {
-                relatives[result.value] = inPhrase[i - 1];
+                relatives[result.result[0].value] = inPhrase[i - 1];
             }
         }
         
@@ -314,9 +382,7 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
             hour = DEFAULT_HOUR;
         } else {
             hour = baseDate.getHours();
-            if (minutes > 0) {
-                minute = baseDate.getMinutes();
-            }
+            minute = baseDate.getMinutes();
         }
     } else {
         // start looking for 3 words phrases, then 2 words phrases and finally 1 word
@@ -329,7 +395,7 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
                     let result = wordsToDatepart(word, language);
                     
                     if (result !== null) {
-                        results.push(result);
+                        result.result.forEach(x => results.push(x));
                         // set words to None so they aren't considered again
                         words.fill(null, i, i + size);
                     } else {
@@ -347,7 +413,7 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
             // remove empty words (erased words because they are part of a phrase)
             words = words.filter(value => value !== null);
         }
-
+        
         for (let r of results) {
             if (r.type === 'special') {
                 if (special === null) {
@@ -363,6 +429,8 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
                 }
             } else if (r.type === WEEKDAY) {
                 weekday = r.value;
+            } else if (r.type === DAY) {
+                dayNumber = r.value;
             } else if (r.type === MONTH) {
                 month = r.value;
             } else if (r.type === QUARTER) {
@@ -388,11 +456,21 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
                 second = 0;
             } else if (r.type === HOUR) {
                 hour = r.value;
+            } else if (r.type === HOURS) {
+                hours = r.value;
+                hour = baseDate.getHours();
+                minute = baseDate.getMinutes();
+                second = baseDate.getSeconds();
+            } else if (r.type === HOURS_NO_MIN) {
+                hours = r.value;
+                hour = baseDate.getHours();
+                minute = 0;
+                second = 0;
             } else if (r.type === TIMEZONE) {
                 timezone = r.value;
             }
         }
-
+        
         // check if am or pm is separated from the time. If it is, join them
         for (let i = 1; i < words.length; i++) {
             if (AM_PM.includes(words[i])) {
@@ -434,7 +512,7 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
             if (newSecond !== null) {
                 second = newSecond;
             }
-
+            
             // FIND YEAR
             // uses canBeYear function (if word is 4 digits and is between this year and this year + 10)
             // 2024 = year 2024
@@ -608,7 +686,7 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
                     if (!isNaN(month)) {
                         month = parseInt(month);
                     } else {
-                        month = wordsToDatepart(month, locale, filter=['month']).value;
+                        month = wordsToDatepart(month, locale, filter=['month']).result[0].value;
                     }
                 }
 
@@ -620,24 +698,29 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
             // FIND JUST NUMBERS THAT COULD BE DAY, MONTH, YEAR, HOUR OR MINUTE
             if (!isNaN(word)) {
                 let number = parseInt(word);
-                if (monthPos === 0) {
-                    if (month === null && canBeMonth(number)) {
-                        month = number;
+                
+                if (pos < words.length - 1 && !isNaN(words[pos + 1])) {
+                    if (monthPos === 0) {
+                        if (month === null && canBeMonth(number)) {
+                            month = number;
+                            continue;
+                        }
+                    } else if (dayNumber === null && canBeDay(number)) {
+                        dayNumber = number;
                         continue;
                     }
-                } else if (dayNumber === null && canBeDay(number)) {
-                    dayNumber = number;
-                    continue;
                 }
-
-                if (monthPos === 1) {
-                    if (month === null && canBeMonth(number)) {
-                        month = number;
+                
+                if (!isNaN(words[pos - 1]) || words[pos - 1] === undefined) {
+                    if (monthPos === 1) {
+                        if (month === null && canBeMonth(number)) {
+                            month = number;
+                            continue;
+                        }
+                    } else if (dayNumber === null && canBeDay(number)) {
+                        dayNumber = number;
                         continue;
                     }
-                } else if (dayNumber === null && canBeDay(number)) {
-                    dayNumber = number;
-                    continue;
                 }
 
                 // year as 4 digits was already processed, so 2 digits is only possibility
@@ -650,7 +733,13 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
                     continue;
                 }
                 if (hour === null && canBeHour(number)) {
-                    hour = number;
+                    if (number < 12) {
+                        if (baseDate.getHours() < number) {
+                            hour = number;
+                        } else {
+                            hour = number + 12;
+                        }
+                    }
                     continue;
                 }
                 if (minute === null && canBeMinute(number)) {
@@ -673,8 +762,8 @@ function parse({text, locale, baseDate=null, localeTimezone=null}) {
             
         }
     }
-    console.log("timezone", timezone, "\nyears", years, "\nmonths", months, "\ndays", days, "\nhours", hours, "\nminutes", minutes, "\nweeks", weeks, "\nquarters", quarters)
-    console.log("special", special, "\nyear", year, "\nmonth", month, "\ndayNumber", dayNumber, "\nweekday", weekday, "\nhour", hour, "\nminute", minute, "\nsecond", second, "\nquarter", quarter)
+    // console.log("timezone", timezone, "\nyears", years, "\nmonths", months, "\ndays", days, "\nhours", hours, "\nminutes", minutes, "\nweeks", weeks, "\nquarters", quarters)
+    // console.log("special", special, "\nyear", year, "\nmonth", month, "\ndayNumber", dayNumber, "\nweekday", weekday, "\nhour", hour, "\nminute", minute, "\nsecond", second, "\nquarter", quarter)
     return futureDatetime({baseDate: baseDate, special: special, days: days, weekday: weekday, 
         dayNumber: dayNumber, month: month, year: year, hour: hour, minute: minute, second: second,
         weeks: weeks, years: years, months: months, quarter: quarter, timezone: timezone, 
@@ -727,6 +816,7 @@ function futureDatetime({weekday = null, weeks = 0, dayNumber = null, days = 0, 
     let baseYear = baseDate.getFullYear();
     
     // if hour is not set in params it is 8 am (DEFAULT_HOUR)
+    hourWasNone = hour === null;
     if (hour === null){
         hour = DEFAULT_HOUR;
     }
@@ -738,10 +828,24 @@ function futureDatetime({weekday = null, weeks = 0, dayNumber = null, days = 0, 
     }
 
     // if I have a special value I don't have to calculate anything else
-    if (special !== null) {
-        if (special === LATER) {
-            return new Date(baseDate.setHours(baseDate.getHours() + HOURS_LATER, 0, 0, 0));
-        } else if (special === WEEKEND) {
+    if (special === TODAY) {
+        minute = 0;
+        second = 0;
+        if (hourWasNone) {
+            if (baseDate.getHours() < 12) {
+                hour = 12;
+            } else if (baseDate.getHours() < 17) {
+                hour = 17;
+            } else if (baseDate.getHours() < 21) {
+                hour = 21;
+            } else {
+                hour = 23;
+                minute = 59;
+            }
+        }
+        baseDate.setHours(hour, minute, second, 0);
+        return baseDate;
+    } else if (special === WEEKEND) {
             // if it is weekend (Saturday or Sunday), add two days to current day so it is on a laborable day
             if (baseDate.getDay() === 6 || baseDate.getDay() === 0) {
                 baseDate.setDate(baseDate.getDate() + 2);
@@ -749,31 +853,37 @@ function futureDatetime({weekday = null, weeks = 0, dayNumber = null, days = 0, 
             // calculate next Saturday
             let result = nextWeekday(baseDate, 6);
             return new Date(result.setHours(hour, minute, second, 0));
-        } else if (special === TONIGHT) {
-            if (baseDate.getHours() < 20) {
+    } else if (special === TONIGHT) {
+        if (baseDate.getHours() < 20) {
+            return new Date(baseDate.setHours(TONIGHT_TIME, 0, 0, 0));
+        } else {
+            return null;
+        }
+    } else if (special === LATER_TONIGHT) {
+            if (baseDate.getHours() < TONIGHT_TIME - HOURS_LATER) {
                 return new Date(baseDate.setHours(TONIGHT_TIME, 0, 0, 0));
             } else {
-                return null;
+                baseDate.setHours(baseDate.getHours() + HOURS_LATER, 0, 0, 0);
+                return new Date(baseDate);
             }
-        } else if (special === TOMORROW) {
-            let result = new Date(baseDate.setDate(baseDate.getDate() + 1));
-            return new Date(result.setHours(hour, minute, second, 0));
-        } else if (special === NEXT_WEEK) {
-            // next Monday, if today is Monday next week Monday (today + 7 days)
-            let result = baseWeekday !== 1 ? nextWeekday(baseDate, 1) : new Date(baseDate.setDate(baseDate.getDate() + 7));
-            return new Date(result.setHours(hour, minute, second, 0));
-        } else if (special === NEXT_MONTH) {
-            let result = new Date(baseDate.setMonth(baseDate.getMonth() + 1, 1));
-            return new Date(result.setHours(hour, minute, second, 0));
-        } else if (special === NEXT_QUARTER) {
-            // this quarter start date + 3 months
-            let result = new Date(baseDate.setMonth(Math.floor(baseMonth / 3) * 3, 1));
-            result.setMonth(result.getMonth() + 3);
-            return new Date(result.setHours(hour, minute, second, 0));
-        } else if (special === NEXT_YEAR) {
-            let result = new Date(baseDate.setFullYear(baseDate.getFullYear() + 1, 0, 1));
-            return new Date(result.setHours(hour, minute, second, 0));
-        }
+    } else if (special === TOMORROW) {
+        let result = new Date(baseDate.setDate(baseDate.getDate() + 1));
+        return new Date(result.setHours(hour, minute, second, 0));
+    } else if (special === NEXT_WEEK) {
+        // next Monday, if today is Monday next week Monday (today + 7 days)
+        let result = baseWeekday !== 1 ? nextWeekday(baseDate, 1) : new Date(baseDate.setDate(baseDate.getDate() + 7));
+        return new Date(result.setHours(hour, minute, second, 0));
+    } else if (special === NEXT_MONTH) {
+        let result = new Date(baseDate.setMonth(baseDate.getMonth() + 1, 1));
+        return new Date(result.setHours(hour, minute, second, 0));
+    } else if (special === NEXT_QUARTER) {
+        // this quarter start date + 3 months
+        let result = new Date(baseDate.setMonth(Math.floor(baseMonth / 3) * 3, 1));
+        result.setMonth(result.getMonth() + 3);
+        return new Date(result.setHours(hour, minute, second, 0));
+    } else if (special === NEXT_YEAR) {
+        let result = new Date(baseDate.setFullYear(baseDate.getFullYear() + 1, 0, 1));
+        return new Date(result.setHours(hour, minute, second, 0));
     }
 
     // if I have relative quarters I translate it to relative months (get start of this quarter and
@@ -1063,4 +1173,77 @@ function futureDatetime({weekday = null, weeks = 0, dayNumber = null, days = 0, 
     }
 }
 
-module.exports = parse;
+function suggest({text, baseDate=null, localeTimezone=null, locale="en-US", maxSuggestions=4}) {
+    if (localeTimezone == null) {
+        let testDate = new Date();
+        let timezoneOffsetInHours = -testDate.getTimezoneOffset() / 60;
+        let offsetString = timezoneOffsetInHours >= 0 ? '+' : '-';
+        offsetString += String(Math.abs(timezoneOffsetInHours)).padStart(2, '0') + ':00';
+    }
+    if (baseDate == null) {
+        baseDate = new Date();
+    }
+    
+    text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    
+    let language = locale.split("-")[0];
+    let firstResult = parse({text, baseDate, locale});
+    if (firstResult !== null) {
+        // console.log("a match ", firstResult);
+        return firstResult;
+    }
+    
+    let glossary = GLOSSARY[language];
+    
+    let suggestions = [];
+    for (let result of glossary) {
+        if (result.target.startsWith(text)) {
+            if (!suggestions.some(s => s[1] === result.type && s[2] === result.value)) {
+                if (result.type === "timezone") {
+                    result.target = "10:00a.m. " + result.target;
+                }
+                suggestions.push(result.target);
+            }
+        }
+        
+        if (suggestions.length >= maxSuggestions) {
+            break;
+        }
+    }
+    if (suggestions.length < maxSuggestions) {
+        for (let result of glossary) {
+            if (result.target.includes(text)) {
+                if (!suggestions.some(s => s[1] === result.type && s[2] === result.value)) {
+                    if (type === "timezone") {
+                        result.target = "10:00a.m. " + result.target;
+                    }
+                    suggestions.push(result.target);
+                }
+            }
+            
+            if (suggestions.length >= maxSuggestions) {
+                break;
+            }
+        }
+    }
+    
+    if (text.split().length === 1 && !isNaN(text)) {
+        suggestions.push("in " + text + " days");
+        let month = baseDate.clone().add(1, 'months').format("MMMM");
+        if (canBeDay(text)) {
+            suggestions.push(text + "-" + month);
+        }
+        if (canBeYear(text)) {
+            suggestions.push(text + "-" + month);
+        }
+        if (canBeHour(text)) {
+            suggestions.push(text + ":00");
+        }
+    }
+    
+    let results = suggestions.map(x => [x, parse({text: x, baseDate, locale})]);
+    console.log("POSSIBLE DATES:", results);
+    return results;
+}
+
+module.exports = {parse, DEFAULT_HOUR, END_OF_DAY_TIME};

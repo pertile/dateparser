@@ -6,5 +6,29 @@
   },
   "scripts": {
     "test": "jest"
-  }
+  },
+  "name": "natural-future-date-parser",
+  "version": "1.0.0",
+  "description": "Converts a natural language text into a date in the future",
+  "main": "dateparser.js",
+  "directories": {
+    "test": "test"
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pertile/dateparser.git"
+  },
+  "keywords": [
+    "date",
+    "future",
+    "parser",
+    "natural"
+  ],
+  "author": "Boosted",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/pertile/dateparser/issues"
+  },
+  "homepage": "https://github.com/pertile/dateparser#readme"
 }
